@@ -26,54 +26,63 @@ for (const el of targets) {
 
 // Estimate formants from a pre-emphasized audio frame using LPC (Levinson-Durbin).
 function estimateFormants(samples, sampleRate) {
-  const n = samples.length;
-  const signal = new Float64Array(n);
-  let energy = 0;
-  for (let i = 1; i < n; i++) {
-    const x = (samples[i] - 0.97 * samples[i - 1]) * (0.5 - 0.5 * Math.cos(2 * Math.PI * i / (n - 1)));
-    signal[i] = x;
-    energy += x * x;
+  // Downsample to 10 kHz before LPC. At 44.1/48 kHz, order-14 LPC
+  // often has too few resonances in the speech band to identify F1/F2.
+  const targetRate = 10000;
+  const length = Math.floor(samples.length * targetRate / sampleRate);
+  if (length < 180) return null;
+  const signal = new Float64Array(length);
+  let sumSquares = 0;
+  for (let i = 0; i < samples.length; i++) sumSquares += samples[i] * samples[i];
+  const rms = Math.sqrt(sumSquares / samples.length);
+  if (rms < 0.002) return null;
+  for (let i = 0; i < length; i++) {
+    const position = i * sampleRate / targetRate;
+    const index = Math.floor(position);
+    const fraction = position - index;
+    const raw = samples[index] * (1 - fraction) + samples[Math.min(index + 1, samples.length - 1)] * fraction;
+    const previousPosition = Math.max(0, position - sampleRate / targetRate);
+    const pi = Math.floor(previousPosition);
+    const pf = previousPosition - pi;
+    const previous = samples[pi] * (1 - pf) + samples[Math.min(pi + 1, samples.length - 1)] * pf;
+    signal[i] = (raw - 0.96 * previous) * (0.54 - 0.46 * Math.cos(2 * Math.PI * i / (length - 1)));
   }
-  if (Math.sqrt(energy / n) < 0.0015) return null;
-  const order = 14;
+  const order = 12;
   const r = new Float64Array(order + 1);
   for (let k = 0; k <= order; k++) {
-    for (let i = k; i < n; i++) r[k] += signal[i] * signal[i - k];
+    for (let i = k; i < length; i++) r[k] += signal[i] * signal[i-k];
   }
-  if (r[0] < 1e-8) return null;
+  if (r[0] < 1e-10) return null;
   const a = new Float64Array(order + 1);
   a[0] = 1;
   let err = r[0];
   for (let k = 1; k <= order; k++) {
     let sum = r[k];
-    for (let j = 1; j < k; j++) sum += a[j] * r[k - j];
+    for (let j = 1; j < k; j++) sum += a[j] * r[k-j];
     const reflection = Math.max(-0.98, Math.min(0.98, -sum / Math.max(err, 1e-12)));
     const next = a.slice();
-    for (let j = 1; j < k; j++) next[j] = a[j] + reflection * a[k - j];
+    for (let j = 1; j < k; j++) next[j] = a[j] + reflection * a[k-j];
     next[k] = reflection;
     a.set(next);
     err *= (1 - reflection * reflection);
     if (err < 1e-12) return null;
   }
-  // Peaks in LPC spectral envelope (Hz), avoiding reliance on any remote model.
   const points = [];
   for (let hz = 180; hz <= 3200; hz += 20) {
-    const w = 2 * Math.PI * hz / sampleRate;
+    const w = 2 * Math.PI * hz / targetRate;
     let re = 1, im = 0;
     for (let k = 1; k <= order; k++) {
-      re += a[k] * Math.cos(w * k);
-      im -= a[k] * Math.sin(w * k);
+      re += a[k] * Math.cos(w*k);
+      im -= a[k] * Math.sin(w*k);
     }
-    points.push({ hz, strength: -10 * Math.log10(re * re + im * im + 1e-12) });
+    points.push({ hz, strength: -10 * Math.log10(re*re + im*im + 1e-12) });
   }
   const peaks = [];
-  for (let i = 2; i < points.length - 2; i++) {
-    if (points[i].strength > points[i-1].strength && points[i].strength > points[i+1].strength) {
-      peaks.push(points[i]);
-    }
+  for (let i = 1; i < points.length - 1; i++) {
+    if (points[i].strength > points[i-1].strength && points[i].strength > points[i+1].strength) peaks.push(points[i]);
   }
   const first = peaks.find(p => p.hz >= 220 && p.hz <= 1050);
-  const second = peaks.find(p => first && p.hz >= Math.max(700, first.hz + 250) && p.hz <= 3000);
+  const second = peaks.find(p => first && p.hz >= Math.max(700, first.hz + 220) && p.hz <= 3000);
   if (!first || !second) return null;
   return { f1: first.hz, f2: second.hz };
 }
@@ -112,6 +121,8 @@ button.addEventListener('click', async () => {
     source.connect(analyser);
     const buffer = new Float32Array(analyser.fftSize);
     const readings = [];
+    let voicedFrames = 0;
+    let peakRms = 0;
     button.textContent = '🎙️ 録音中… / Recording…';
     output.textContent = '母音を伸ばして発音してください…（約1.5秒）';
     // Discard onset and offset; use central, approximately steady-state frames.
@@ -119,12 +130,19 @@ button.addEventListener('click', async () => {
       await wait(90);
       analyser.getFloatTimeDomainData(buffer);
       if (i >= 3 && i <= 15) {
+        let sum = 0;
+        for (let j = 0; j < buffer.length; j++) sum += buffer[j] * buffer[j];
+        const rms = Math.sqrt(sum / buffer.length);
+        peakRms = Math.max(peakRms, rms);
+        if (rms >= 0.002) voicedFrames++;
         const result = estimateFormants(buffer, context.sampleRate);
         if (result) readings.push(result);
       }
     }
-    if (readings.length < 4) {
-      output.textContent = '十分な母音音声を検出できませんでした。静かな場所で少し長く発音してください。';
+    if (readings.length < 2) {
+      output.textContent = voicedFrames < 2
+        ? `マイクの音量が小さいようです（最大RMS ${peakRms.toFixed(4)}）。マイクに近づいて1.5秒ほど母音を伸ばしてください。`
+        : `音声は検出しましたが、F1・F2を推定できませんでした（音声フレーム${voicedFrames}件、推定成功${readings.length}件）。静かな場所で試してください。`;
       return;
     }
     const f1 = median(readings.map(r => r.f1));
