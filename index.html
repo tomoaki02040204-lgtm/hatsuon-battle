@@ -136,6 +136,23 @@
         <button class="restart-button" id="restart-button" type="button"><span id="restart-button-label">Try Again</span><span aria-hidden="true">→</span></button>
       </section>
 
+      <section class="ipa-lab" id="ipa-lab" aria-labelledby="ipa-lab-title">
+        <p class="ipa-kicker">EXPERIMENTAL · 実験版</p>
+        <h2 id="ipa-lab-title">IPA 母音分析 / Vowel Lab</h2>
+        <p>日本語の「あ・い・う・え・お」を約1.5秒、一定の声で発音してください。録音は端末内で分析し、サーバーへ送信しません。</p>
+        <p class="ipa-en">Hold a Japanese vowel for about 1.5 seconds. Audio is analyzed locally in your browser.</p>
+        <div class="ipa-buttons" id="ipa-targets" role="group" aria-label="練習する母音">
+          <button type="button" class="ipa-target is-active" data-vowel="a" aria-pressed="true">あ <small>/a/</small></button>
+          <button type="button" class="ipa-target" data-vowel="i" aria-pressed="false">い <small>/i/</small></button>
+          <button type="button" class="ipa-target" data-vowel="u" aria-pressed="false">う <small>/ɯ/</small></button>
+          <button type="button" class="ipa-target" data-vowel="e" aria-pressed="false">え <small>/e/</small></button>
+          <button type="button" class="ipa-target" data-vowel="o" aria-pressed="false">お <small>/o/</small></button>
+        </div>
+        <button class="ipa-record" id="ipa-record" type="button">🎙️ 母音を分析する / Analyze vowel</button>
+        <div class="ipa-output" id="ipa-output" role="status" aria-live="polite">母音を選び、ボタンを押してください。</div>
+        <p class="ipa-warning">※ 周波数からの簡易推定です。音声認識AIは使用せず、精度や発音の正しさは保証しません。周囲の騒音・声質・マイクの特性で結果が変わります。</p>
+      </section>
+
       <footer class="footer-note">
         <span class="footer-spark" aria-hidden="true"></span>
         <p id="footer-copy">Every attempt helps you improve.</p>
@@ -144,5 +161,6 @@
       <div class="decor decor-right" aria-hidden="true"></div>
     </main>
     <script type="module" src="./app.js"></script>
+    <script type="module" src="./ipa-lab.js"></script>
   </body>
 </html>
